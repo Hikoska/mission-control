@@ -4,7 +4,7 @@ let webviewInstance: any = null;
 let resizeObserver: ResizeObserver | null = null;
 
 export async function connectSureThing(container: HTMLDivElement) {
-  if (webviewInstance) return; // Already connected
+  if (webviewInstance) return true; // Already connected
 
   try {
     const { Webview } = await import("@tauri-apps/api/webview");
@@ -44,12 +44,7 @@ export async function connectSureThing(container: HTMLDivElement) {
   } catch (err) {
     console.error("Failed to create SureThing webview:", err);
     // Fallback: open in system browser
-    try {
-      const { open } = await import("@tauri-apps/plugin-shell");
-      await open("https://surething.io");
-    } catch {
-      window.open("https://surething.io", "_blank");
-    }
+    window.open("https://surething.io", "_blank");
     return false;
   }
 }
@@ -80,8 +75,8 @@ export function useSureThingEmbed(
     }
   }, [isConnected, containerRef]);
 
-  // Also handle window resize (sidebar/agent panel toggles trigger container resize
-  // which ResizeObserver handles, but window resize also matters)
+  // Handle window resize — sidebar/agent panel toggles trigger container resize
+  // which ResizeObserver handles, but window-level resize also matters
   useEffect(() => {
     if (!isConnected) return;
     const handleResize = async () => {
