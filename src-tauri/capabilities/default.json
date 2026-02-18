@@ -1,14 +1,9 @@
 {
   "identifier": "default",
   "description": "Capabilities for Mission Control",
-  "windows": [
-    "main",
-    "surething"
-  ],
+  "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:window:default",
-    "core:webview:default",
     "shell:default"
   ]
 }
