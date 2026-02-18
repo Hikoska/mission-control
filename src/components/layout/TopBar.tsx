@@ -1,7 +1,7 @@
 import { useAppStore } from "../../stores/appStore";
 import { clsx } from "clsx";
 export function TopBar() {
-  const { viewMode, setViewMode, agentPanelVisible, toggleAgentPanel } = useAppStore();
+  const { viewMode, setViewMode, agentPanelVisible, toggleAgentPanel, isConnected } = useAppStore();
   return (
     <div className="h-11 bg-mc-surface border-b border-mc-border flex items-center justify-between px-4 no-select">
       <div className="flex items-center gap-1">
@@ -13,7 +13,8 @@ export function TopBar() {
           </button>))}
       </div>
       <div className="flex items-center gap-2 text-xs text-mc-text-muted">
-        <div className="w-1.5 h-1.5 rounded-full bg-mc-success animate-pulse-dot"/><span>Connected \u2014 SureThing Agent</span>
+        <div className={clsx("w-1.5 h-1.5 rounded-full", isConnected ? "bg-mc-success animate-pulse-dot" : "bg-mc-warning")}/>
+        <span>{isConnected ? "Live \u2014 SureThing Agent" : "Demo Mode \u2014 Click Connect"}</span>
       </div>
       <div className="flex items-center gap-1">
         <button onClick={toggleAgentPanel} className={clsx("px-2.5 py-1 rounded-md text-xs font-medium transition-colors",

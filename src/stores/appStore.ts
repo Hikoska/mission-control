@@ -16,14 +16,16 @@ interface AppState {
   sidebarCollapsed: boolean; toggleSidebar: () => void;
   agentPanelVisible: boolean; toggleAgentPanel: () => void;
   commandPaletteOpen: boolean; toggleCommandPalette: () => void;
+  // v0.2: SureThing connection
+  isConnected: boolean; setConnected: (val: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   threads: [
-    { id:"adapro", name:"Adapro — IT Infrastructure", status:"active",
+    { id:"adapro", name:"Adapro \u2014 IT Infrastructure", status:"active",
       lastMessage:"Analyzing vendor quotes...", lastMessageAt:new Date().toISOString(), unreadCount:0, icon:"\ud83c\udfed" },
     { id:"mission-control", name:"Mission Control App", status:"active",
-      lastMessage:"Building the app now...", lastMessageAt:new Date().toISOString(), unreadCount:0, icon:"\ud83d\ude80" },
+      lastMessage:"v0.2 — Live connection enabled", lastMessageAt:new Date().toISOString(), unreadCount:0, icon:"\ud83d\ude80" },
     { id:"linkgrow-strategy", name:"Linkgrow Strategy", status:"idle",
       lastMessage:"Roadmap: Adapro \u2192 Inicia \u2192 SaaS \u2192 Content",
       lastMessageAt:new Date(Date.now()-3600000).toISOString(), unreadCount:0, icon:"\ud83d\udcca" },
@@ -49,7 +51,7 @@ export const useAppStore = create<AppState>((set) => ({
         content:"Work on the mission control desktop app in the background.",
         timestamp:new Date(Date.now()-300000).toISOString() },
       { id:"mc2", threadId:"mission-control", role:"assistant",
-        content:"Building now. Tauri + React + TypeScript. Communication hub first.",
+        content:"v0.2 ready. Click Connect to link with SureThing for live communication.",
         timestamp:new Date().toISOString() },
     ],
   },
@@ -57,14 +59,14 @@ export const useAppStore = create<AppState>((set) => ({
   activities: [
     { id:"a1", action:"file_analysis", description:"Extracted vendor quotes from WeTransfer ZIP",
       timestamp:new Date(Date.now()-2400000).toISOString(), status:"completed", threadId:"adapro" },
-    { id:"a2", action:"code_generation", description:"Scaffolding Mission Control desktop app",
-      timestamp:new Date().toISOString(), status:"running", threadId:"mission-control" },
+    { id:"a2", action:"live_connection", description:"SureThing API bridge enabled (v0.2)",
+      timestamp:new Date().toISOString(), status:"completed", threadId:"mission-control" },
     { id:"a3", action:"monitoring", description:"Watching for Adapro report review feedback",
       timestamp:new Date().toISOString(), status:"pending", threadId:"adapro" },
   ],
   pendingActions: [
-    { id:"pa1", type:"approval", title:"Adapro Report v1.2 review",
-      description:"Ludovic is reviewing the Status Quo and Action Plan reports",
+    { id:"pa1", type:"approval", title:"Connect to SureThing",
+      description:"Link Mission Control to live SureThing agent for real-time communication",
       timestamp:new Date().toISOString(), priority:"high" },
   ],
   addActivity: (a) => set((s) => ({ activities: [a,...s.activities] })),
@@ -74,4 +76,6 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarCollapsed: false, toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   agentPanelVisible: true, toggleAgentPanel: () => set((s) => ({ agentPanelVisible: !s.agentPanelVisible })),
   commandPaletteOpen: false, toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen })),
+  // v0.2: SureThing connection
+  isConnected: false, setConnected: (val) => set({ isConnected: val }),
 }));
