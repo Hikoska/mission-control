@@ -1,23 +1,10 @@
 {
   "identifier": "default",
-  "description": "Capabilities for Mission Control with embedded SureThing webview",
+  "description": "Capabilities for Mission Control",
   "windows": [
     "main"
   ],
-  "webviews": [
-    "main",
-    "surething-embed"
-  ],
   "permissions": [
-    "core:default",
-    "core:webview:allow-create-webview",
-    "core:webview:allow-webview-close",
-    "core:webview:allow-set-webview-position",
-    "core:webview:allow-set-webview-size",
-    "core:webview:allow-webview-show",
-    "core:webview:allow-webview-hide",
-    "core:webview:allow-set-webview-focus",
-    "core:webview:allow-webview-position",
-    "core:webview:allow-webview-size"
+    "core:default"
   ]
 }

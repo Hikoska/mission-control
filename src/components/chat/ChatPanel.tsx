@@ -1,13 +1,7 @@
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState } from "react";
 import { useAppStore } from "../../stores/appStore";
 import { MessageBubble } from "./MessageBubble";
 import { MessageInput } from "./MessageInput";
-import {
-  useSureThingEmbed,
-  connectSureThing,
-  disconnectSureThing,
-  type EmbedStatus,
-} from "../../hooks/useSureThingEmbed";
 
 function ConnectScreen({ onConnect }: { onConnect: () => void }) {
   return (
@@ -38,65 +32,78 @@ function ConnectScreen({ onConnect }: { onConnect: () => void }) {
   );
 }
 
-function EmbeddedView({
-  containerRef,
-  onDisconnect,
-  embedStatus,
-  embedError,
-}: {
-  containerRef: React.RefObject<HTMLDivElement | null>;
-  onDisconnect: () => void;
-  embedStatus: EmbedStatus;
-  embedError?: string;
-}) {
+type EmbedStatus = "loading" | "ready" | "blocked";
+
+function EmbeddedView({ onDisconnect }: { onDisconnect: () => void }) {
+  const [status, setStatus] = useState<EmbedStatus>("loading");
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const handleLoad = () => {
+    // iframe loaded — either surething.io rendered, or the browser blocked it
+    // We can't reliably detect X-Frame-Options from JS, but if it loaded without error, we're good
+    setStatus("ready");
+  };
+
+  const handleError = () => {
+    setStatus("blocked");
+  };
+
   return (
     <div className="flex-1 flex flex-col min-w-0 relative">
-      {/* Floating disconnect button */}
-      <div className="absolute top-2 right-2 z-10">
+      {/* Floating controls */}
+      <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
+        <a href="https://surething.io" target="_blank" rel="noopener noreferrer"
+          className="px-2.5 py-1 rounded-lg bg-mc-bg/80 backdrop-blur-sm border border-mc-border
+                     text-[11px] text-mc-text-muted hover:text-mc-text hover:border-mc-border-active
+                     transition-colors flex items-center gap-1.5"
+          title="Open in browser">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+          </svg>
+          <span>Browser</span>
+        </a>
         <button onClick={onDisconnect}
           className="px-2.5 py-1 rounded-lg bg-mc-bg/80 backdrop-blur-sm border border-mc-border
                      text-[11px] text-mc-text-muted hover:text-mc-text hover:border-mc-border-active
                      transition-colors flex items-center gap-1.5"
-          title="Disconnect embedded view">
+          title="Disconnect">
           <span className={`w-1.5 h-1.5 rounded-full ${
-            embedStatus === "connected" ? "bg-mc-success" :
-            embedStatus === "loading" ? "bg-mc-warning animate-pulse" :
+            status === "ready" ? "bg-mc-success" :
+            status === "loading" ? "bg-mc-warning animate-pulse" :
             "bg-red-500"
           }`} />
-          <span>{
-            embedStatus === "connected" ? "Connected" :
-            embedStatus === "loading" ? "Loading..." :
-            "Error"
-          }</span>
+          <span>{status === "ready" ? "Connected" : status === "loading" ? "Loading..." : "Blocked"}</span>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         </button>
       </div>
 
-      {/* Loading overlay - shown while webview initializes */}
-      {embedStatus === "loading" && (
+      {/* Loading overlay */}
+      {status === "loading" && (
         <div className="absolute inset-0 z-[5] flex items-center justify-center bg-mc-bg">
           <div className="text-center">
             <div className="w-10 h-10 mx-auto mb-4 border-2 border-mc-accent border-t-transparent rounded-full animate-spin" />
             <p className="text-sm text-mc-text-muted">Loading SureThing...</p>
-            <p className="text-[11px] text-mc-text-muted mt-1">The login page will appear here</p>
           </div>
         </div>
       )}
 
-      {/* Error overlay */}
-      {embedStatus === "error" && (
+      {/* Blocked overlay */}
+      {status === "blocked" && (
         <div className="absolute inset-0 z-[5] flex items-center justify-center bg-mc-bg">
           <div className="text-center max-w-sm px-6">
-            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-red-500/10 flex items-center justify-center">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-red-400">
-                <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
+            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-mc-warning/10 flex items-center justify-center">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-mc-warning">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
             </div>
-            <h3 className="text-sm font-semibold text-mc-text mb-2">Couldn\u2019t load SureThing</h3>
-            <p className="text-xs text-mc-text-muted mb-1">{embedError || "The embedded webview failed to initialize."}</p>
-            <p className="text-xs text-mc-text-muted mb-4">You can try again or open it in your browser instead.</p>
+            <h3 className="text-sm font-semibold text-mc-text mb-2">Embedding blocked</h3>
+            <p className="text-xs text-mc-text-muted mb-4">
+              SureThing\u2019s server doesn\u2019t allow embedding. You can still use it in a separate browser window.
+            </p>
             <div className="flex gap-2 justify-center">
               <button onClick={onDisconnect}
                 className="px-4 py-2 rounded-lg bg-mc-surface border border-mc-border text-xs text-mc-text hover:bg-mc-bg-hover transition-colors">
@@ -111,64 +118,36 @@ function EmbeddedView({
         </div>
       )}
 
-      {/* This div is the target area - the Tauri webview overlays it */}
-      <div ref={containerRef} className="flex-1 bg-mc-bg" />
+      {/* The iframe — simple and reliable */}
+      <iframe
+        ref={iframeRef}
+        src="https://surething.io"
+        onLoad={handleLoad}
+        onError={handleError}
+        className="flex-1 w-full border-0 bg-mc-bg"
+        sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals"
+        allow="clipboard-read; clipboard-write"
+      />
     </div>
   );
 }
 
 export function ChatPanel() {
   const { activeThreadId, messages, threads, isConnected, setConnected } = useAppStore();
-  const embedContainerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [embedStatus, setEmbedStatus] = useState<EmbedStatus>("idle");
-  const [embedError, setEmbedError] = useState<string>();
-
-  useSureThingEmbed(embedContainerRef, isConnected);
 
   const activeThread = threads.find((t) => t.id === activeThreadId);
   const threadMessages = activeThreadId ? messages[activeThreadId] || [] : [];
 
-  const handleStatusChange = useCallback((status: EmbedStatus, error?: string) => {
-    setEmbedStatus(status);
-    if (error) setEmbedError(error);
-  }, []);
+  const handleConnect = () => setConnected(true);
+  const handleDisconnect = () => setConnected(false);
 
-  const handleConnect = async () => {
-    setConnected(true);
-    setEmbedStatus("loading");
-    setEmbedError(undefined);
-
-    // Small delay to let React render the container div first
-    setTimeout(async () => {
-      if (embedContainerRef.current) {
-        const success = await connectSureThing(embedContainerRef.current, handleStatusChange);
-        if (!success) {
-          // Status already set by callback, but ensure connected state reflects failure
-          // Keep isConnected=true so user sees the error UI with "Go Back" button
-        }
-      }
-    }, 150);
-  };
-
-  const handleDisconnect = async () => {
-    await disconnectSureThing();
-    setConnected(false);
-    setEmbedStatus("idle");
-    setEmbedError(undefined);
-  };
-
+  // Connected mode: show embedded SureThing
   if (isConnected) {
-    return (
-      <EmbeddedView
-        containerRef={embedContainerRef}
-        onDisconnect={handleDisconnect}
-        embedStatus={embedStatus}
-        embedError={embedError}
-      />
-    );
+    return <EmbeddedView onDisconnect={handleDisconnect} />;
   }
 
+  // Disconnected mode: show connect screen or native demo chat
   if (!activeThread) {
     return <ConnectScreen onConnect={handleConnect} />;
   }
