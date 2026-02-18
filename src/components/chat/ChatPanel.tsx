@@ -1,14 +1,72 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useAppStore } from "../../stores/appStore";
 import { MessageBubble } from "./MessageBubble";
 import { MessageInput } from "./MessageInput";
+
+const ST_URL = "https://surething.io";
+
+/* ── Tauri helpers ─────────────────────────────── */
+
+async function spawnCompanionWindow(): Promise<any | null> {
+  try {
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+
+    // If window already exists from a previous session, just focus it
+    const existing = await WebviewWindow.getByLabel("surething").catch(() => null);
+    if (existing) {
+      await existing.setFocus();
+      return existing;
+    }
+
+    const w = new WebviewWindow("surething", {
+      url: ST_URL,
+      title: "SureThing",
+      width: 1000,
+      height: 750,
+      center: true,
+    });
+
+    return new Promise<typeof w | null>((resolve) => {
+      let done = false;
+      const fin = (v: typeof w | null) => {
+        if (!done) { done = true; resolve(v); }
+      };
+      w.once("tauri://created", () => fin(w));
+      w.once("tauri://error", (e: unknown) => {
+        console.error("[SureThing] Window error:", e);
+        fin(null);
+      });
+      setTimeout(() => {
+        console.warn("[SureThing] Window creation timed out (8s)");
+        fin(null);
+      }, 8000);
+    });
+  } catch (err) {
+    console.error("[SureThing] WebviewWindow unavailable:", err);
+    return null;
+  }
+}
+
+function openBrowser() {
+  window.open(ST_URL, "_blank");
+}
+
+function copyUrl() {
+  navigator.clipboard?.writeText(ST_URL).then(
+    () => console.log("[SureThing] URL copied"),
+    () => console.warn("[SureThing] Clipboard write failed")
+  );
+}
+
+/* ── Connect Screen ────────────────────────────── */
 
 function ConnectScreen({ onConnect }: { onConnect: () => void }) {
   return (
     <div className="flex-1 flex items-center justify-center">
       <div className="text-center max-w-md px-8">
         <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-mc-accent/10 flex items-center justify-center">
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-mc-accent">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               strokeWidth="1.5" className="text-mc-accent">
             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
           </svg>
         </div>
@@ -17,120 +75,190 @@ function ConnectScreen({ onConnect }: { onConnect: () => void }) {
           Link Mission Control to your SureThing agent for live, bidirectional communication.
           Your threads, agent activity, and quick actions stay in the native panels around it.
         </p>
-        <button onClick={onConnect}
+        <button
+          onClick={onConnect}
           className="w-full px-6 py-3 rounded-xl bg-mc-accent text-white font-semibold text-sm
                      hover:bg-mc-accent-hover transition-all duration-200
-                     shadow-lg shadow-mc-accent/20 hover:shadow-mc-accent/30 hover:scale-[1.02]
-                     active:scale-[0.98]">
-          \u26a1 Connect Now
+                     shadow-lg shadow-mc-accent/20 hover:shadow-mc-accent/30
+                     hover:scale-[1.02] active:scale-[0.98]"
+        >
+          {"\u26a1"} Connect Now
         </button>
         <p className="text-[11px] text-mc-text-muted mt-4">
-          Opens SureThing in an embedded view. You\u2019ll log in once, then it\u2019s always connected.
+          Opens SureThing in a companion window. You{"\u2019"}ll log in once, then it{"\u2019"}s always connected.
         </p>
       </div>
     </div>
   );
 }
 
-type EmbedStatus = "loading" | "ready" | "blocked";
+/* ── Live View (connected state) ───────────────── */
 
-function EmbeddedView({ onDisconnect }: { onDisconnect: () => void }) {
-  const [status, setStatus] = useState<EmbedStatus>("loading");
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+type Status = "connecting" | "companion" | "browser" | "failed";
 
-  const handleLoad = () => {
-    // iframe loaded — either surething.io rendered, or the browser blocked it
-    // We can't reliably detect X-Frame-Options from JS, but if it loaded without error, we're good
-    setStatus("ready");
+function LiveView({ onDisconnect }: { onDisconnect: () => void }) {
+  const [status, setStatus] = useState<Status>("connecting");
+  const [copied, setCopied] = useState(false);
+  const winRef = useRef<any>(null);
+
+  // Spawn companion window on mount
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const w = await spawnCompanionWindow();
+      if (cancelled) return;
+
+      if (w) {
+        winRef.current = w;
+        setStatus("companion");
+
+        // Listen for user closing the companion window
+        w.once("tauri://close-requested", () => {
+          winRef.current = null;
+          onDisconnect();
+        }).catch(() => {});
+      } else {
+        // WebviewWindow failed — fall back to system browser
+        openBrowser();
+        setStatus("browser");
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleFocus = async () => {
+    try {
+      await winRef.current?.setFocus();
+    } catch {
+      // Window might have been closed externally
+      openBrowser();
+      setStatus("browser");
+    }
   };
 
-  const handleError = () => {
-    setStatus("blocked");
+  const handleDisconnect = async () => {
+    try { await winRef.current?.close(); } catch {}
+    winRef.current = null;
+    onDisconnect();
   };
 
-  return (
-    <div className="flex-1 flex flex-col min-w-0 relative">
-      {/* Floating controls */}
-      <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
-        <a href="https://surething.io" target="_blank" rel="noopener noreferrer"
-          className="px-2.5 py-1 rounded-lg bg-mc-bg/80 backdrop-blur-sm border border-mc-border
-                     text-[11px] text-mc-text-muted hover:text-mc-text hover:border-mc-border-active
-                     transition-colors flex items-center gap-1.5"
-          title="Open in browser">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-            <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
-          </svg>
-          <span>Browser</span>
-        </a>
-        <button onClick={onDisconnect}
-          className="px-2.5 py-1 rounded-lg bg-mc-bg/80 backdrop-blur-sm border border-mc-border
-                     text-[11px] text-mc-text-muted hover:text-mc-text hover:border-mc-border-active
-                     transition-colors flex items-center gap-1.5"
-          title="Disconnect">
-          <span className={`w-1.5 h-1.5 rounded-full ${
-            status === "ready" ? "bg-mc-success" :
-            status === "loading" ? "bg-mc-warning animate-pulse" :
-            "bg-red-500"
-          }`} />
-          <span>{status === "ready" ? "Connected" : status === "loading" ? "Loading..." : "Blocked"}</span>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
+  const handleCopy = () => {
+    copyUrl();
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  /* ── Connecting spinner ── */
+  if (status === "connecting") {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-mc-bg">
+        <div className="text-center">
+          <div className="w-10 h-10 mx-auto mb-4 border-2 border-mc-accent border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-mc-text-muted">Opening SureThing{"\u2026"}</p>
+          <p className="text-[11px] text-mc-text-muted mt-2 opacity-60">
+            A companion window will open momentarily
+          </p>
+        </div>
       </div>
+    );
+  }
 
-      {/* Loading overlay */}
-      {status === "loading" && (
-        <div className="absolute inset-0 z-[5] flex items-center justify-center bg-mc-bg">
-          <div className="text-center">
-            <div className="w-10 h-10 mx-auto mb-4 border-2 border-mc-accent border-t-transparent rounded-full animate-spin" />
-            <p className="text-sm text-mc-text-muted">Loading SureThing...</p>
-          </div>
+  const isCompanion = status === "companion";
+
+  /* ── Connected / Browser fallback ── */
+  return (
+    <div className="flex-1 flex items-center justify-center">
+      <div className="text-center max-w-md px-8">
+        {/* Status icon */}
+        <div className={`w-20 h-20 mx-auto mb-6 rounded-2xl flex items-center justify-center ${
+          isCompanion ? "bg-mc-success/10" : "bg-mc-accent/10"
+        }`}>
+          {isCompanion ? (
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 strokeWidth="1.5" className="text-mc-success">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+              <polyline points="22 4 12 14.01 9 11.01" />
+            </svg>
+          ) : (
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 strokeWidth="1.5" className="text-mc-accent">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          )}
         </div>
-      )}
 
-      {/* Blocked overlay */}
-      {status === "blocked" && (
-        <div className="absolute inset-0 z-[5] flex items-center justify-center bg-mc-bg">
-          <div className="text-center max-w-sm px-6">
-            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-mc-warning/10 flex items-center justify-center">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-mc-warning">
-                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-              </svg>
-            </div>
-            <h3 className="text-sm font-semibold text-mc-text mb-2">Embedding blocked</h3>
-            <p className="text-xs text-mc-text-muted mb-4">
-              SureThing\u2019s server doesn\u2019t allow embedding. You can still use it in a separate browser window.
-            </p>
-            <div className="flex gap-2 justify-center">
-              <button onClick={onDisconnect}
-                className="px-4 py-2 rounded-lg bg-mc-surface border border-mc-border text-xs text-mc-text hover:bg-mc-bg-hover transition-colors">
-                Go Back
-              </button>
-              <a href="https://surething.io" target="_blank" rel="noopener noreferrer"
-                className="px-4 py-2 rounded-lg bg-mc-accent text-white text-xs font-medium hover:bg-mc-accent-hover transition-colors">
-                Open in Browser
-              </a>
-            </div>
-          </div>
+        {/* Title */}
+        <div className="flex items-center justify-center gap-2 mb-2">
+          <span className={`w-2 h-2 rounded-full ${
+            isCompanion ? "bg-mc-success animate-pulse" : "bg-mc-accent"
+          }`} />
+          <h2 className="text-xl font-bold text-mc-text">
+            {isCompanion ? "SureThing is Open" : "Opened in Browser"}
+          </h2>
         </div>
-      )}
 
-      {/* The iframe — simple and reliable */}
-      <iframe
-        ref={iframeRef}
-        src="https://surething.io"
-        onLoad={handleLoad}
-        onError={handleError}
-        className="flex-1 w-full border-0 bg-mc-bg"
-        sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals"
-        allow="clipboard-read; clipboard-write"
-      />
+        {/* Description */}
+        <p className="text-sm text-mc-text-muted mb-6 leading-relaxed">
+          {isCompanion
+            ? "Your session is running in a companion window. Mission Control\u2019s sidebar and agent panel stay here for context."
+            : "SureThing should have opened in your default browser. If it didn\u2019t appear, click below to try again."}
+        </p>
+
+        {/* Action buttons */}
+        <div className="flex gap-3 justify-center mb-4">
+          {isCompanion ? (
+            <button
+              onClick={handleFocus}
+              className="px-5 py-2.5 rounded-xl bg-mc-accent text-white text-sm font-semibold
+                         hover:bg-mc-accent-hover transition-colors shadow-md shadow-mc-accent/20"
+            >
+              {"\u26a1"} Focus Window
+            </button>
+          ) : (
+            <button
+              onClick={openBrowser}
+              className="px-5 py-2.5 rounded-xl bg-mc-accent text-white text-sm font-semibold
+                         hover:bg-mc-accent-hover transition-colors shadow-md shadow-mc-accent/20"
+            >
+              Open Again
+            </button>
+          )}
+          <button
+            onClick={handleDisconnect}
+            className="px-5 py-2.5 rounded-xl bg-mc-surface border border-mc-border text-sm
+                       text-mc-text hover:bg-mc-bg-hover transition-colors"
+          >
+            Disconnect
+          </button>
+        </div>
+
+        {/* Secondary actions */}
+        <div className="flex items-center justify-center gap-3">
+          {isCompanion && (
+            <button
+              onClick={() => { openBrowser(); }}
+              className="text-[11px] text-mc-text-muted hover:text-mc-accent transition-colors underline underline-offset-2"
+            >
+              open in browser instead
+            </button>
+          )}
+          <button
+            onClick={handleCopy}
+            className="text-[11px] text-mc-text-muted hover:text-mc-accent transition-colors underline underline-offset-2"
+          >
+            {copied ? "\u2713 copied!" : "copy URL"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
+
+/* ── Main ChatPanel ────────────────────────────── */
 
 export function ChatPanel() {
   const { activeThreadId, messages, threads, isConnected, setConnected } = useAppStore();
@@ -142,16 +270,17 @@ export function ChatPanel() {
   const handleConnect = () => setConnected(true);
   const handleDisconnect = () => setConnected(false);
 
-  // Connected mode: show embedded SureThing
+  // Connected mode: companion window
   if (isConnected) {
-    return <EmbeddedView onDisconnect={handleDisconnect} />;
+    return <LiveView onDisconnect={handleDisconnect} />;
   }
 
-  // Disconnected mode: show connect screen or native demo chat
+  // No thread selected: show connect screen
   if (!activeThread) {
     return <ConnectScreen onConnect={handleConnect} />;
   }
 
+  // Thread selected: show demo chat
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <div className="flex items-center justify-between px-5 py-3 border-b border-mc-border bg-mc-surface no-select">
@@ -162,14 +291,17 @@ export function ChatPanel() {
             <div className="flex items-center gap-1.5 mt-0.5">
               <span className={`w-1.5 h-1.5 rounded-full ${
                 activeThread.status === "active" ? "bg-mc-success" :
-                activeThread.status === "waiting" ? "bg-mc-warning" : "bg-mc-text-muted"}`} />
+                activeThread.status === "waiting" ? "bg-mc-warning" : "bg-mc-text-muted"
+              }`} />
               <span className="text-[11px] text-mc-text-muted capitalize">{activeThread.status}</span>
             </div>
           </div>
         </div>
-        <button onClick={handleConnect}
+        <button
+          onClick={handleConnect}
           className="px-3 py-1.5 rounded-lg bg-mc-accent/10 text-mc-accent text-xs font-medium
-                     hover:bg-mc-accent/20 transition-colors flex items-center gap-1.5">
+                     hover:bg-mc-accent/20 transition-colors flex items-center gap-1.5"
+        >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
           </svg>
