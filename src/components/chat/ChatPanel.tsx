@@ -1,62 +1,10 @@
 import { useRef, useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/appStore";
 import { MessageBubble } from "./MessageBubble";
 import { MessageInput } from "./MessageInput";
 
 const ST_URL = "https://surething.io";
-
-/* ── Tauri helpers ─────────────────────────────── */
-
-async function spawnCompanionWindow(): Promise<any | null> {
-  try {
-    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-
-    // If window already exists from a previous session, just focus it
-    const existing = await WebviewWindow.getByLabel("surething").catch(() => null);
-    if (existing) {
-      await existing.setFocus();
-      return existing;
-    }
-
-    const w = new WebviewWindow("surething", {
-      url: ST_URL,
-      title: "SureThing",
-      width: 1000,
-      height: 750,
-      center: true,
-    });
-
-    return new Promise<typeof w | null>((resolve) => {
-      let done = false;
-      const fin = (v: typeof w | null) => {
-        if (!done) { done = true; resolve(v); }
-      };
-      w.once("tauri://created", () => fin(w));
-      w.once("tauri://error", (e: unknown) => {
-        console.error("[SureThing] Window error:", e);
-        fin(null);
-      });
-      setTimeout(() => {
-        console.warn("[SureThing] Window creation timed out (8s)");
-        fin(null);
-      }, 8000);
-    });
-  } catch (err) {
-    console.error("[SureThing] WebviewWindow unavailable:", err);
-    return null;
-  }
-}
-
-function openBrowser() {
-  window.open(ST_URL, "_blank");
-}
-
-function copyUrl() {
-  navigator.clipboard?.writeText(ST_URL).then(
-    () => console.log("[SureThing] URL copied"),
-    () => console.warn("[SureThing] Clipboard write failed")
-  );
-}
 
 /* ── Connect Screen ────────────────────────────── */
 
@@ -85,43 +33,44 @@ function ConnectScreen({ onConnect }: { onConnect: () => void }) {
           {"\u26a1"} Connect Now
         </button>
         <p className="text-[11px] text-mc-text-muted mt-4">
-          Opens SureThing in a companion window. You{"\u2019"}ll log in once, then it{"\u2019"}s always connected.
+          Opens SureThing in a companion window alongside Mission Control.
         </p>
       </div>
     </div>
   );
 }
 
-/* ── Live View (connected state) ───────────────── */
+/* ── Live View ─────────────────────────────────── */
 
 type Status = "connecting" | "companion" | "browser" | "failed";
 
 function LiveView({ onDisconnect }: { onDisconnect: () => void }) {
   const [status, setStatus] = useState<Status>("connecting");
   const [copied, setCopied] = useState(false);
-  const winRef = useRef<any>(null);
 
-  // Spawn companion window on mount
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      const w = await spawnCompanionWindow();
-      if (cancelled) return;
+      try {
+        // Create companion window via Rust (bypasses broken JS WebView2 API)
+        const result = await invoke<string>("open_surething_window");
+        if (!cancelled) {
+          console.log("[SureThing] Rust window result:", result);
+          setStatus("companion");
+        }
+      } catch (err) {
+        console.error("[SureThing] Rust window failed:", err);
+        if (cancelled) return;
 
-      if (w) {
-        winRef.current = w;
-        setStatus("companion");
-
-        // Listen for user closing the companion window
-        w.once("tauri://close-requested", () => {
-          winRef.current = null;
-          onDisconnect();
-        }).catch(() => {});
-      } else {
-        // WebviewWindow failed — fall back to system browser
-        openBrowser();
-        setStatus("browser");
+        // Fallback: open in system browser via Rust
+        try {
+          await invoke("open_in_browser", { url: ST_URL });
+          if (!cancelled) setStatus("browser");
+        } catch (browserErr) {
+          console.error("[SureThing] Browser open failed:", browserErr);
+          if (!cancelled) setStatus("failed");
+        }
       }
     })();
 
@@ -130,50 +79,62 @@ function LiveView({ onDisconnect }: { onDisconnect: () => void }) {
 
   const handleFocus = async () => {
     try {
-      await winRef.current?.setFocus();
+      await invoke("focus_surething_window");
     } catch {
-      // Window might have been closed externally
-      openBrowser();
-      setStatus("browser");
+      // Window was closed externally — try reopening
+      try {
+        await invoke<string>("open_surething_window");
+        setStatus("companion");
+      } catch {
+        try {
+          await invoke("open_in_browser", { url: ST_URL });
+          setStatus("browser");
+        } catch { /* exhausted all options */ }
+      }
     }
   };
 
   const handleDisconnect = async () => {
-    try { await winRef.current?.close(); } catch {}
-    winRef.current = null;
+    try { await invoke("close_surething_window"); } catch {}
     onDisconnect();
   };
 
-  const handleCopy = () => {
-    copyUrl();
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleOpenBrowser = async () => {
+    try {
+      await invoke("open_in_browser", { url: ST_URL });
+    } catch {
+      window.open(ST_URL, "_blank");
+    }
   };
 
-  /* ── Connecting spinner ── */
+  const handleCopy = () => {
+    navigator.clipboard?.writeText(ST_URL).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  /* Connecting spinner */
   if (status === "connecting") {
     return (
       <div className="flex-1 flex items-center justify-center bg-mc-bg">
         <div className="text-center">
           <div className="w-10 h-10 mx-auto mb-4 border-2 border-mc-accent border-t-transparent rounded-full animate-spin" />
           <p className="text-sm text-mc-text-muted">Opening SureThing{"\u2026"}</p>
-          <p className="text-[11px] text-mc-text-muted mt-2 opacity-60">
-            A companion window will open momentarily
-          </p>
         </div>
       </div>
     );
   }
 
   const isCompanion = status === "companion";
+  const isFailed = status === "failed";
 
-  /* ── Connected / Browser fallback ── */
   return (
     <div className="flex-1 flex items-center justify-center">
       <div className="text-center max-w-md px-8">
-        {/* Status icon */}
+        {/* Icon */}
         <div className={`w-20 h-20 mx-auto mb-6 rounded-2xl flex items-center justify-center ${
-          isCompanion ? "bg-mc-success/10" : "bg-mc-accent/10"
+          isCompanion ? "bg-mc-success/10" : isFailed ? "bg-red-500/10" : "bg-mc-accent/10"
         }`}>
           {isCompanion ? (
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -183,7 +144,7 @@ function LiveView({ onDisconnect }: { onDisconnect: () => void }) {
             </svg>
           ) : (
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 strokeWidth="1.5" className="text-mc-accent">
+                 strokeWidth="1.5" className={isFailed ? "text-red-400" : "text-mc-accent"}>
               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
               <polyline points="15 3 21 3 21 9" />
               <line x1="10" y1="14" x2="21" y2="3" />
@@ -194,10 +155,12 @@ function LiveView({ onDisconnect }: { onDisconnect: () => void }) {
         {/* Title */}
         <div className="flex items-center justify-center gap-2 mb-2">
           <span className={`w-2 h-2 rounded-full ${
-            isCompanion ? "bg-mc-success animate-pulse" : "bg-mc-accent"
+            isCompanion ? "bg-mc-success animate-pulse" :
+            isFailed ? "bg-red-500" : "bg-mc-accent"
           }`} />
           <h2 className="text-xl font-bold text-mc-text">
-            {isCompanion ? "SureThing is Open" : "Opened in Browser"}
+            {isCompanion ? "SureThing is Open" :
+             isFailed ? "Connection Failed" : "Opened in Browser"}
           </h2>
         </div>
 
@@ -205,51 +168,43 @@ function LiveView({ onDisconnect }: { onDisconnect: () => void }) {
         <p className="text-sm text-mc-text-muted mb-6 leading-relaxed">
           {isCompanion
             ? "Your session is running in a companion window. Mission Control\u2019s sidebar and agent panel stay here for context."
-            : "SureThing should have opened in your default browser. If it didn\u2019t appear, click below to try again."}
+            : isFailed
+            ? "Couldn\u2019t open SureThing automatically. Use the buttons below to open it manually."
+            : "SureThing should have opened in your browser. If it didn\u2019t appear, click below."}
         </p>
 
-        {/* Action buttons */}
+        {/* Buttons */}
         <div className="flex gap-3 justify-center mb-4">
           {isCompanion ? (
-            <button
-              onClick={handleFocus}
+            <button onClick={handleFocus}
               className="px-5 py-2.5 rounded-xl bg-mc-accent text-white text-sm font-semibold
-                         hover:bg-mc-accent-hover transition-colors shadow-md shadow-mc-accent/20"
-            >
+                         hover:bg-mc-accent-hover transition-colors shadow-md shadow-mc-accent/20">
               {"\u26a1"} Focus Window
             </button>
           ) : (
-            <button
-              onClick={openBrowser}
+            <button onClick={handleOpenBrowser}
               className="px-5 py-2.5 rounded-xl bg-mc-accent text-white text-sm font-semibold
-                         hover:bg-mc-accent-hover transition-colors shadow-md shadow-mc-accent/20"
-            >
-              Open Again
+                         hover:bg-mc-accent-hover transition-colors shadow-md shadow-mc-accent/20">
+              Open in Browser
             </button>
           )}
-          <button
-            onClick={handleDisconnect}
+          <button onClick={handleDisconnect}
             className="px-5 py-2.5 rounded-xl bg-mc-surface border border-mc-border text-sm
-                       text-mc-text hover:bg-mc-bg-hover transition-colors"
-          >
+                       text-mc-text hover:bg-mc-bg-hover transition-colors">
             Disconnect
           </button>
         </div>
 
-        {/* Secondary actions */}
-        <div className="flex items-center justify-center gap-3">
+        {/* Secondary */}
+        <div className="flex items-center justify-center gap-3 text-[11px]">
           {isCompanion && (
-            <button
-              onClick={() => { openBrowser(); }}
-              className="text-[11px] text-mc-text-muted hover:text-mc-accent transition-colors underline underline-offset-2"
-            >
+            <button onClick={handleOpenBrowser}
+              className="text-mc-text-muted hover:text-mc-accent transition-colors underline underline-offset-2">
               open in browser instead
             </button>
           )}
-          <button
-            onClick={handleCopy}
-            className="text-[11px] text-mc-text-muted hover:text-mc-accent transition-colors underline underline-offset-2"
-          >
+          <button onClick={handleCopy}
+            className="text-mc-text-muted hover:text-mc-accent transition-colors underline underline-offset-2">
             {copied ? "\u2713 copied!" : "copy URL"}
           </button>
         </div>
@@ -258,7 +213,7 @@ function LiveView({ onDisconnect }: { onDisconnect: () => void }) {
   );
 }
 
-/* ── Main ChatPanel ────────────────────────────── */
+/* ── Main ──────────────────────────────────────── */
 
 export function ChatPanel() {
   const { activeThreadId, messages, threads, isConnected, setConnected } = useAppStore();
@@ -267,20 +222,14 @@ export function ChatPanel() {
   const activeThread = threads.find((t) => t.id === activeThreadId);
   const threadMessages = activeThreadId ? messages[activeThreadId] || [] : [];
 
-  const handleConnect = () => setConnected(true);
-  const handleDisconnect = () => setConnected(false);
-
-  // Connected mode: companion window
   if (isConnected) {
-    return <LiveView onDisconnect={handleDisconnect} />;
+    return <LiveView onDisconnect={() => setConnected(false)} />;
   }
 
-  // No thread selected: show connect screen
   if (!activeThread) {
-    return <ConnectScreen onConnect={handleConnect} />;
+    return <ConnectScreen onConnect={() => setConnected(true)} />;
   }
 
-  // Thread selected: show demo chat
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <div className="flex items-center justify-between px-5 py-3 border-b border-mc-border bg-mc-surface no-select">
@@ -297,11 +246,9 @@ export function ChatPanel() {
             </div>
           </div>
         </div>
-        <button
-          onClick={handleConnect}
+        <button onClick={() => setConnected(true)}
           className="px-3 py-1.5 rounded-lg bg-mc-accent/10 text-mc-accent text-xs font-medium
-                     hover:bg-mc-accent/20 transition-colors flex items-center gap-1.5"
-        >
+                     hover:bg-mc-accent/20 transition-colors flex items-center gap-1.5">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
           </svg>
