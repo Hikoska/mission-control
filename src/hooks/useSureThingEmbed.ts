@@ -1,10 +1,17 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 
 let webviewInstance: any = null;
 let resizeObserver: ResizeObserver | null = null;
 
-export async function connectSureThing(container: HTMLDivElement) {
-  if (webviewInstance) return true; // Already connected
+export type EmbedStatus = "idle" | "loading" | "connected" | "error";
+
+export async function connectSureThing(
+  container: HTMLDivElement,
+  onStatus?: (status: EmbedStatus, error?: string) => void
+): Promise<boolean> {
+  if (webviewInstance) { onStatus?.("connected"); return true; }
+
+  onStatus?.("loading");
 
   try {
     const { Webview } = await import("@tauri-apps/api/webview");
@@ -14,17 +21,39 @@ export async function connectSureThing(container: HTMLDivElement) {
     const appWindow = getCurrentWindow();
     const rect = container.getBoundingClientRect();
 
+    // Use device pixel ratio to handle Windows DPI scaling
+    const dpr = window.devicePixelRatio || 1;
+
     const webview = new Webview(appWindow, "surething-chat", {
       url: "https://surething.io",
-      x: Math.round(rect.x),
-      y: Math.round(rect.y),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
+      x: rect.x,
+      y: rect.y,
+      width: Math.max(rect.width, 400),
+      height: Math.max(rect.height, 300),
+      transparent: false,
     });
 
-    webview.once("tauri://error", (e: any) => {
-      console.error("SureThing webview error:", e);
+    // Wait for the webview to actually be created on the Rust side
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Webview creation timed out after 10s"));
+      }, 10000);
+
+      webview.once("tauri://created", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+
+      webview.once("tauri://error", (e: any) => {
+        clearTimeout(timeout);
+        reject(new Error(String(e?.payload || e)));
+      });
     });
+
+    // Explicitly set position, size, and show the webview
+    await webview.setPosition(new LogicalPosition(Math.round(rect.x), Math.round(rect.y)));
+    await webview.setSize(new LogicalSize(Math.round(rect.width), Math.round(rect.height)));
+    await webview.setFocus();
 
     webviewInstance = webview;
 
@@ -40,11 +69,12 @@ export async function connectSureThing(container: HTMLDivElement) {
     });
     resizeObserver.observe(container);
 
+    onStatus?.("connected");
     return true;
   } catch (err) {
-    console.error("Failed to create SureThing webview:", err);
-    // Fallback: open in system browser
-    window.open("https://surething.io", "_blank");
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Failed to create SureThing webview:", msg);
+    onStatus?.("error", msg);
     return false;
   }
 }
@@ -75,8 +105,6 @@ export function useSureThingEmbed(
     }
   }, [isConnected, containerRef]);
 
-  // Handle window resize — sidebar/agent panel toggles trigger container resize
-  // which ResizeObserver handles, but window-level resize also matters
   useEffect(() => {
     if (!isConnected) return;
     const handleResize = async () => {
@@ -93,7 +121,6 @@ export function useSureThingEmbed(
     return () => window.removeEventListener("resize", handleResize);
   }, [isConnected, containerRef]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => { disconnectSureThing(); };
   }, []);
