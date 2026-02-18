@@ -1,17 +1,10 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 let webviewInstance: any = null;
 let resizeObserver: ResizeObserver | null = null;
 
-export type EmbedStatus = "idle" | "loading" | "connected" | "error";
-
-export async function connectSureThing(
-  container: HTMLDivElement,
-  onStatus?: (status: EmbedStatus, error?: string) => void
-): Promise<boolean> {
-  if (webviewInstance) { onStatus?.("connected"); return true; }
-
-  onStatus?.("loading");
+export async function connectSureThing(container: HTMLDivElement) {
+  if (webviewInstance) return true;
 
   try {
     const { Webview } = await import("@tauri-apps/api/webview");
@@ -21,60 +14,66 @@ export async function connectSureThing(
     const appWindow = getCurrentWindow();
     const rect = container.getBoundingClientRect();
 
-    // Use device pixel ratio to handle Windows DPI scaling
-    const dpr = window.devicePixelRatio || 1;
-
-    const webview = new Webview(appWindow, "surething-chat", {
-      url: "https://surething.io",
-      x: rect.x,
-      y: rect.y,
-      width: Math.max(rect.width, 400),
-      height: Math.max(rect.height, 300),
-      transparent: false,
+    console.log("[SureThing] Creating webview at", {
+      x: Math.round(rect.x), y: Math.round(rect.y),
+      width: Math.round(rect.width), height: Math.round(rect.height)
     });
 
-    // Wait for the webview to actually be created on the Rust side
+    const webview = new Webview(appWindow, "surething-embed", {
+      url: "https://surething.io",
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      focus: true,
+    });
+
+    // Wait for the webview to be created before proceeding
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error("Webview creation timed out after 10s"));
-      }, 10000);
+        console.warn("[SureThing] Webview creation timed out, attempting show anyway");
+        resolve();
+      }, 5000);
 
       webview.once("tauri://created", () => {
+        console.log("[SureThing] Webview created successfully");
         clearTimeout(timeout);
         resolve();
       });
 
       webview.once("tauri://error", (e: any) => {
+        console.error("[SureThing] Webview creation error:", e);
         clearTimeout(timeout);
-        reject(new Error(String(e?.payload || e)));
+        reject(new Error(String(e)));
       });
     });
 
-    // Explicitly set position, size, and show the webview
-    await webview.setPosition(new LogicalPosition(Math.round(rect.x), Math.round(rect.y)));
-    await webview.setSize(new LogicalSize(Math.round(rect.width), Math.round(rect.height)));
+    // Explicitly show the webview
+    await webview.show();
     await webview.setFocus();
+    console.log("[SureThing] Webview shown and focused");
 
     webviewInstance = webview;
 
-    // Track resize of the container and reposition the webview
+    // Track container resize to reposition webview overlay
     resizeObserver = new ResizeObserver(async () => {
       const r = container.getBoundingClientRect();
       if (webviewInstance) {
         try {
           await webviewInstance.setPosition(new LogicalPosition(Math.round(r.x), Math.round(r.y)));
           await webviewInstance.setSize(new LogicalSize(Math.round(r.width), Math.round(r.height)));
-        } catch {}
+        } catch (e) {
+          console.warn("[SureThing] Resize error:", e);
+        }
       }
     });
     resizeObserver.observe(container);
 
-    onStatus?.("connected");
     return true;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("Failed to create SureThing webview:", msg);
-    onStatus?.("error", msg);
+    console.error("[SureThing] Failed to create webview:", err);
+    // Fallback: open in default browser
+    window.open("https://surething.io", "_blank");
     return false;
   }
 }
